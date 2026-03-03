@@ -6,41 +6,71 @@ const haversine = require('../utils/haversine');
 // GET /api/parkings?lat=&lng=&radius=&q=
 exports.searchParkings = async (req, res) => {
     try {
-        let { lat, lng, radius = 5000, q } = req.query;
+        let { lat, lng, radius = 50000, q } = req.query;
         lat = parseFloat(lat); lng = parseFloat(lng);
+        const hasCoords = !isNaN(lat) && !isNaN(lng);
 
         let query = {};
         if (q) query.name = { $regex: q, $options: 'i' };
 
         const allParkings = await Parking.find(query);
-        let results = allParkings
-            .map(p => {
-                const dist = (!isNaN(lat) && !isNaN(lng))
-                    ? haversine(lat, lng, p.location.lat, p.location.lng)
-                    : null;
-                return { parking: p, distanceMeters: dist };
-            })
-            .filter(p => p.distanceMeters === null || p.distanceMeters <= parseFloat(radius))
-            .sort((a, b) => (a.distanceMeters || 0) - (b.distanceMeters || 0));
+        let results = allParkings.map(p => {
+            const dist = hasCoords ? haversine(lat, lng, p.location.lat, p.location.lng) : null;
+            return { parking: p, distanceMeters: dist };
+        });
 
-        // Annotate each with slot counts
+        // If coords provided, sort by distance (no radius limit by default)
+        if (hasCoords) {
+            results = results
+                .filter(p => p.distanceMeters <= parseFloat(radius))
+                .sort((a, b) => a.distanceMeters - b.distanceMeters);
+        }
+
+        // Annotate with live slot counts
         const annotated = await Promise.all(results.map(async ({ parking, distanceMeters }) => {
             const slots = await Slot.find({ parkingId: parking._id });
             const available = slots.filter(s => s.status === 'AVAILABLE').length;
             const evAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'EV').length;
             const total = slots.length;
             const occupancyRate = total > 0 ? Math.round(((total - available) / total) * 100) : 0;
+            const minPrice = slots.length > 0 ? Math.min(...slots.map(s => s.basePricePerHour)) : 0;
             return {
                 parking,
                 distanceMeters: distanceMeters ? Math.round(distanceMeters) : null,
                 availableSlots: available,
                 evAvailableSlots: evAvailable,
                 totalSlots: total,
-                occupancyRate
+                occupancyRate,
+                minPricePerHour: minPrice
             };
         }));
 
         res.json(annotated);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// GET /api/parkings/all  — all parkings for map (no auth needed)
+exports.getAllParkings = async (req, res) => {
+    try {
+        const allParkings = await Parking.find({});
+        const result = await Promise.all(allParkings.map(async (parking) => {
+            const slots = await Slot.find({ parkingId: parking._id });
+            const available = slots.filter(s => s.status === 'AVAILABLE').length;
+            const evAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'EV').length;
+            const total = slots.length;
+            const minPrice = slots.length > 0 ? Math.min(...slots.map(s => s.basePricePerHour)) : 0;
+            return {
+                parking,
+                availableSlots: available,
+                evAvailableSlots: evAvailable,
+                totalSlots: total,
+                occupancyRate: total > 0 ? Math.round(((total - available) / total) * 100) : 0,
+                minPricePerHour: minPrice
+            };
+        }));
+        res.json(result);
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -60,26 +90,41 @@ exports.getParkingDetails = async (req, res) => {
     }
 };
 
-// GET /api/parkings/:id/slots (with EV priority sort)
+// GET /api/parkings/:id/slots
 exports.getParkingSlots = async (req, res) => {
     try {
         const { vehicleType } = req.query;
         let slots = await Slot.find({ parkingId: req.params.id }).sort({ slotType: -1, entryPriority: 1 });
 
-        // For normal vehicles, filter out EV slots if normal slots exist
+        // Add "next available time" annotation for each slot
+        const now = new Date();
+        const annotated = await Promise.all(slots.map(async (slot) => {
+            const activeBooking = await Booking.findOne({
+                slotId: slot._id,
+                status: { $in: ['SCHEDULED', 'RESERVED', 'OCCUPIED'] },
+                scheduledStartTime: { $lte: new Date(now.getTime() + 3600000) },
+                scheduledEndTime: { $gt: now }
+            }).sort({ scheduledEndTime: -1 });
+
+            return {
+                ...slot.toObject(),
+                nextFreeAt: activeBooking ? activeBooking.scheduledEndTime : null
+            };
+        }));
+
+        // EV priority filter
         if (vehicleType === 'Petrol') {
-            const normalAvail = slots.filter(s => s.slotType === 'NORMAL' && s.status === 'AVAILABLE').length;
-            if (normalAvail > 0) {
-                slots = slots.filter(s => s.slotType === 'NORMAL');
-            }
+            const normalAvail = annotated.filter(s => s.slotType === 'NORMAL' && s.status === 'AVAILABLE').length;
+            if (normalAvail > 0) return res.json(annotated.filter(s => s.slotType === 'NORMAL'));
         }
-        res.json(slots);
+
+        res.json(annotated);
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
 
-// GET /api/suggestions?lat=&lng=&areaId=
+// GET /api/parkings/suggestions
 exports.getSuggestions = async (req, res) => {
     try {
         let { lat, lng, areaId } = req.query;
@@ -97,11 +142,7 @@ exports.getSuggestions = async (req, res) => {
             return { parking: p, distanceMeters: Math.round(dist), availableSlots: available, evAvailableSlots: evAvail, minPricePerHour: minPrice === Infinity ? 0 : minPrice };
         }));
 
-        const filtered = suggestions
-            .filter(Boolean)
-            .filter(s => s.availableSlots > 0)
-            .sort((a, b) => a.distanceMeters - b.distanceMeters);
-
+        const filtered = suggestions.filter(Boolean).filter(s => s.availableSlots > 0).sort((a, b) => a.distanceMeters - b.distanceMeters);
         res.json(filtered);
     } catch (err) {
         res.status(500).json({ message: err.message });
