@@ -31,6 +31,7 @@ exports.searchParkings = async (req, res) => {
             const slots = await Slot.find({ parkingId: parking._id });
             const available = slots.filter(s => s.status === 'AVAILABLE').length;
             const evAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'EV').length;
+            const bikeAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'BIKE').length;
             const total = slots.length;
             const occupancyRate = total > 0 ? Math.round(((total - available) / total) * 100) : 0;
             const minPrice = slots.length > 0 ? Math.min(...slots.map(s => s.basePricePerHour)) : 0;
@@ -39,6 +40,7 @@ exports.searchParkings = async (req, res) => {
                 distanceMeters: distanceMeters ? Math.round(distanceMeters) : null,
                 availableSlots: available,
                 evAvailableSlots: evAvailable,
+                bikeAvailableSlots: bikeAvailable,
                 totalSlots: total,
                 occupancyRate,
                 minPricePerHour: minPrice
@@ -59,12 +61,14 @@ exports.getAllParkings = async (req, res) => {
             const slots = await Slot.find({ parkingId: parking._id });
             const available = slots.filter(s => s.status === 'AVAILABLE').length;
             const evAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'EV').length;
+            const bikeAvailable = slots.filter(s => s.status === 'AVAILABLE' && s.slotType === 'BIKE').length;
             const total = slots.length;
             const minPrice = slots.length > 0 ? Math.min(...slots.map(s => s.basePricePerHour)) : 0;
             return {
                 parking,
                 availableSlots: available,
                 evAvailableSlots: evAvailable,
+                bikeAvailableSlots: bikeAvailable,
                 totalSlots: total,
                 occupancyRate: total > 0 ? Math.round(((total - available) / total) * 100) : 0,
                 minPricePerHour: minPrice
@@ -112,10 +116,15 @@ exports.getParkingSlots = async (req, res) => {
             };
         }));
 
-        // EV priority filter
+        // Vehicle type filter — prefer matching slot type when available
         if (vehicleType === 'Petrol') {
             const normalAvail = annotated.filter(s => s.slotType === 'NORMAL' && s.status === 'AVAILABLE').length;
             if (normalAvail > 0) return res.json(annotated.filter(s => s.slotType === 'NORMAL'));
+        } else if (vehicleType === 'Bike') {
+            const bikeAvail = annotated.filter(s => s.slotType === 'BIKE' && s.status === 'AVAILABLE').length;
+            if (bikeAvail > 0) return res.json(annotated.filter(s => s.slotType === 'BIKE'));
+            // fallback to NORMAL if no bike slots
+            return res.json(annotated.filter(s => s.slotType === 'NORMAL'));
         }
 
         res.json(annotated);

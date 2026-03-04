@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const slotSchema = new mongoose.Schema({
     parkingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Parking', required: true },
     slotNumber: { type: String, required: true },
-    slotType: { type: String, enum: ['NORMAL', 'EV'], default: 'NORMAL' },
+    slotType: { type: String, enum: ['NORMAL', 'EV', 'BIKE'], default: 'NORMAL' },
     entryPriority: { type: String, enum: ['PREMIUM', 'STANDARD'], default: 'STANDARD' },
     chargingType: { type: String, enum: ['FAST', 'NORMAL', 'NONE'], default: 'NONE' },
     basePricePerHour: { type: Number, required: true, default: 5 },
