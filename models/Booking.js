@@ -4,7 +4,7 @@ const bookingSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     slotId: { type: mongoose.Schema.Types.ObjectId, ref: 'Slot', required: true },
     parkingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Parking', required: true },
-    vehicleType: { type: String, enum: ['EV', 'Petrol'], required: true },
+    vehicleType: { type: String, enum: ['EV', 'Petrol', 'Bike'], required: true },
 
     // Scheduled time (user-chosen, can be future)
     scheduledStartTime: { type: Date, required: true },
@@ -21,6 +21,9 @@ const bookingSchema = new mongoose.Schema({
         default: 'SCHEDULED'
     },
     reservedUntil: { type: Date }, // set when SCHEDULED -> RESERVED (15-min arrival window)
+    notificationSentAt: { type: Date, default: null }, // tracks 15-min reminder send
+    earlyEndedAt: { type: Date, default: null },
+    refundAmount: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now }
 });
 

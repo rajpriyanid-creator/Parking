@@ -7,7 +7,7 @@ const userSchema = new mongoose.Schema({
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
     vehicle: {
-        type: { type: String, enum: ['EV', 'Petrol'], default: 'Petrol' },
+        type: { type: String, enum: ['EV', 'Petrol', 'Bike'], default: 'Petrol' },
         number: { type: String }
     },
     fcmToken: { type: String }, // for push notifications

@@ -13,10 +13,26 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/smartparki
 mongoose.connect(MONGO_URI)
   .then(() => {
     console.log('MongoDB Connected');
-    // Start background release job (every 60 seconds)
-    const { releaseExpiredReservations } = require('./jobs/releaseJob');
+
+    const {
+      releaseExpiredReservations,
+      sendPreBookingNotifications,
+      checkStartTimeGpsRelease,
+      autoCompleteExpiredBookings
+    } = require('./jobs/releaseJob');
+
+    // Run every minute
     setInterval(releaseExpiredReservations, 60 * 1000);
-    console.log('[CRON] Release job started (every 60s)');
+    setInterval(sendPreBookingNotifications, 60 * 1000);
+    setInterval(checkStartTimeGpsRelease, 60 * 1000);
+    setInterval(autoCompleteExpiredBookings, 60 * 1000);
+
+    // Run immediately on start too
+    releaseExpiredReservations();
+    sendPreBookingNotifications();
+    autoCompleteExpiredBookings();
+
+    console.log('[CRON] All jobs started (every 60s)');
   })
   .catch(err => console.log('MongoDB connection error:', err));
 

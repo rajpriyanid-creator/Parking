@@ -12,5 +12,6 @@ router.get('/:id', ctrl.getBooking);
 router.post('/:id/confirm-arrival', ctrl.confirmArrival);
 router.post('/:id/cancel', ctrl.cancelBooking);
 router.post('/:id/complete', ctrl.completeBooking);
+router.post('/:id/early-end', ctrl.earlyEnd);
 
 module.exports = router;

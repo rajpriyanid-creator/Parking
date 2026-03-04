@@ -14,13 +14,18 @@ function calculatePrice({ basePricePerHour, premiumExtraPerHour, entryPriority, 
     return parseFloat(((basePricePerHour + premium) * durationHours).toFixed(2));
 }
 
-// Check for overlapping bookings on a slot
+// Check for overlapping bookings on a slot (with mandatory 10-min gap between bookings)
+const SLOT_GAP_MINUTES = 10;
 async function hasOverlap(slotId, startTime, endTime, excludeBookingId = null) {
+    // Expand the end time by GAP to enforce a buffer between consecutive bookings
+    const bufferedEnd = new Date(endTime.getTime() + SLOT_GAP_MINUTES * 60000);
+    // Similarly, the new booking must not start within GAP of an existing booking's end
+    const bufferedStart = new Date(startTime.getTime() - SLOT_GAP_MINUTES * 60000);
     const query = {
         slotId,
         status: { $in: ['SCHEDULED', 'RESERVED', 'OCCUPIED'] },
-        scheduledStartTime: { $lt: endTime },
-        scheduledEndTime: { $gt: startTime }
+        scheduledStartTime: { $lt: bufferedEnd },
+        scheduledEndTime: { $gt: bufferedStart }
     };
     if (excludeBookingId) query._id = { $ne: excludeBookingId };
     const count = await Booking.countDocuments(query);
@@ -287,3 +292,68 @@ exports.pricePreview = async (req, res) => {
         res.status(500).json({ message: err.message });
     }
 };
+
+// POST /api/bookings/:id/early-end
+// Driver ends booking early. If they are >500m away, grant 50% refund of unused time.
+exports.earlyEnd = async (req, res) => {
+    try {
+        const { lat, lng } = req.body; // optional GPS
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ message: 'Booking not found' });
+        if (booking.userId.toString() !== req.user.userId)
+            return res.status(403).json({ message: 'Forbidden' });
+        if (booking.status !== 'OCCUPIED')
+            return res.status(400).json({ message: 'Can only end an OCCUPIED booking early' });
+
+        const now = new Date();
+        const scheduledEnd = new Date(booking.scheduledEndTime);
+
+        // Calculate remaining time and its price value
+        const remainingMs = Math.max(0, scheduledEnd - now);
+        const remainingHours = remainingMs / 3600000;
+        const slot = await Slot.findById(booking.slotId);
+        const pricePerHour = slot
+            ? slot.basePricePerHour + (slot.entryPriority === 'PREMIUM' ? (slot.premiumExtraPerHour || 0) : 0)
+            : 0;
+        const remainingValue = parseFloat((remainingHours * pricePerHour).toFixed(2));
+
+        let refundGranted = false;
+        let refundAmount = 0;
+
+        // GPS check: if driver provided location and is >500m away, refund 50% of remaining
+        if (lat != null && lng != null && slot) {
+            const parking = await Parking.findById(booking.parkingId);
+            if (parking) {
+                const dist = haversineDistance(lat, lng, parking.location.lat, parking.location.lng);
+                if (dist > 500 && remainingValue > 0) {
+                    refundAmount = parseFloat((remainingValue * 0.5).toFixed(2));
+                    refundGranted = true;
+                }
+            }
+        }
+
+        // Mark booking complete
+        await Booking.findByIdAndUpdate(booking._id, {
+            status: 'COMPLETED',
+            earlyEndedAt: now,
+            refundAmount
+        });
+        // Free the slot
+        await Slot.findByIdAndUpdate(booking.slotId, { status: 'AVAILABLE', currentBookingId: null });
+        // Update payment
+        await Payment.findOneAndUpdate({ bookingId: booking._id, status: 'PENDING' }, { status: 'PAID' });
+
+        res.json({
+            ok: true,
+            refundGranted,
+            refundAmount,
+            remainingHours: parseFloat(remainingHours.toFixed(2)),
+            message: refundGranted
+                ? `Slot freed early! ₹${refundAmount} refund issued for unused time.`
+                : 'Slot freed. Thanks for using Smart Parking!'
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
